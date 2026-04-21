@@ -19,6 +19,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+if not os.environ.get("SSL_CERT_FILE"):
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
+
 FRUSTRATION_QUERY = "@type:action @session.type:user @action.frustration.type:*"
 
 
