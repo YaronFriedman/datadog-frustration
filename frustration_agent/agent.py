@@ -13,13 +13,30 @@ load_dotenv()
 
 _CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "anthropic/claude-opus-4-7")
 _GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+_AZURE_MODEL = os.getenv("AZURE_MODEL", "azure/gpt-4.1-mini")
 
 
 def _pick_model():
-    """Prefer Claude when ANTHROPIC_API_KEY is set; else fall back to Gemini."""
+    """Pick the LLM based on available credentials.
+
+    Priority: Azure OpenAI > Anthropic (Claude) > Gemini. Fails loudly
+    when none of the required env vars are set.
+    """
+    if os.getenv("AZURE_OPENAI_API_KEY") and os.getenv("AZURE_OPENAI_ENDPOINT"):
+        return LiteLlm(
+            model=_AZURE_MODEL,
+            api_base=os.environ["AZURE_OPENAI_ENDPOINT"],
+            api_key=os.environ["AZURE_OPENAI_API_KEY"],
+            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+        )
     if os.getenv("ANTHROPIC_API_KEY"):
         return LiteLlm(model=_CLAUDE_MODEL)
-    return _GEMINI_MODEL
+    if os.getenv("GOOGLE_API_KEY"):
+        return _GEMINI_MODEL
+    raise RuntimeError(
+        "No LLM credentials set. Provide one of: AZURE_OPENAI_API_KEY+AZURE_OPENAI_ENDPOINT, "
+        "ANTHROPIC_API_KEY, or GOOGLE_API_KEY."
+    )
 
 
 INSTRUCTION = """You are the Deepchecks Frustration Analyst — an agent that investigates
