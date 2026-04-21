@@ -29,7 +29,7 @@ if not os.environ.get("SSL_CERT_FILE"):
 FRUSTRATION_QUERY = "@type:action @session.type:user @action.frustration.type:*"
 
 
-def fetch_frustration_events(hours: int, app_id: str | None, limit: int) -> list[dict]:
+def fetch_frustration_events(hours: int, app_id: str | None, limit: int, env: str | None = None) -> list[dict]:
     """Fetch RUM action events with frustration signals."""
     cfg = Configuration()
     cfg.api_key["apiKeyAuth"] = os.environ["DD_API_KEY"]
@@ -39,6 +39,8 @@ def fetch_frustration_events(hours: int, app_id: str | None, limit: int) -> list
     query = FRUSTRATION_QUERY
     if app_id:
         query += f" @application.id:{app_id}"
+    if env:
+        query += f" env:{env}"
 
     to_time = datetime.now(timezone.utc)
     from_time = to_time - timedelta(hours=hours)
@@ -87,14 +89,35 @@ def _replay_url(site: str, app_id: str | None, session_id: str | None, view_id: 
     return f"{base}?{'&'.join(params)}"
 
 
-def extract_signals(events: list[dict], site: str) -> list[dict]:
-    """Keep only the fields useful for pattern summarization."""
+def _user_email(attrs: dict) -> str | None:
+    usr = attrs.get("usr") or {}
+    for k in ("email", "name"):
+        v = usr.get(k)
+        if isinstance(v, str) and "@" in v:
+            return v.lower()
+    return None
+
+
+def _is_excluded(email: str | None, excluded_domains: list[str]) -> bool:
+    if not email or not excluded_domains:
+        return False
+    domain = email.split("@")[-1]
+    return any(d.lower() in domain for d in excluded_domains)
+
+
+def extract_signals(events: list[dict], site: str, excluded_domains: list[str]) -> tuple[list[dict], int]:
+    """Keep only the fields useful for pattern summarization. Returns (rows, excluded_count)."""
     rows = []
+    excluded = 0
     for e in events:
         attrs = e.get("attributes", {}).get("attributes", {})
         action = attrs.get("action", {}) or {}
         frustration_types = (action.get("frustration") or {}).get("type") or []
         if not frustration_types:
+            continue
+        email = _user_email(attrs)
+        if _is_excluded(email, excluded_domains):
+            excluded += 1
             continue
         view = attrs.get("view", {}) or {}
         app = attrs.get("application", {}) or {}
@@ -116,18 +139,23 @@ def extract_signals(events: list[dict], site: str) -> list[dict]:
             "view_name": view.get("name"),
             "application_id": app.get("id"),
             "session_id": session.get("id"),
+            "user_email": email,
+            "user_domain": email.split("@")[-1] if email else None,
             "error_count": (action.get("error") or {}).get("count"),
             "replay_url": _replay_url(site, app.get("id"), session.get("id"), view.get("id"), ts_ms),
         })
-    return rows
+    return rows, excluded
 
 
 def aggregate(rows: list[dict]) -> dict:
     by_type: Counter = Counter()
     by_url: dict[str, Counter] = defaultdict(Counter)
     by_target: dict[str, Counter] = defaultdict(Counter)
+    by_domain: Counter = Counter()
     sample_replays: dict[str, list[str]] = defaultdict(list)
     for r in rows:
+        if r.get("user_domain"):
+            by_domain[r["user_domain"]] += 1
         for ftype in r["frustration"]:
             by_type[ftype] += 1
             if r["view_url"]:
@@ -140,6 +168,7 @@ def aggregate(rows: list[dict]) -> dict:
         "total_frustrations": sum(by_type.values()),
         "total_actions": len(rows),
         "by_type": dict(by_type),
+        "by_customer_domain": dict(by_domain.most_common(25)),
         "top_urls_by_type": {k: v.most_common(10) for k, v in by_url.items()},
         "top_targets_by_type": {k: v.most_common(10) for k, v in by_target.items()},
         "sample_replays_by_type": dict(sample_replays),
@@ -181,7 +210,11 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Summarize Datadog RUM frustration signals.")
     p.add_argument("--hours", type=int, default=24, help="Lookback window in hours.")
     p.add_argument("--app-id", help="Filter to a specific RUM application ID.")
-    p.add_argument("--limit", type=int, default=1000, help="Max events to fetch.")
+    p.add_argument("--limit", type=int, default=5000, help="Max events to fetch.")
+    p.add_argument("--env", help="Datadog env tag filter (e.g. prod). Skipped if RUM has no env tag.")
+    p.add_argument("--exclude-domain", action="append", default=["deepchecks.com"],
+                   help="Email domain substring to exclude (repeatable). Default: deepchecks.com")
+    p.add_argument("--no-default-exclude", action="store_true", help="Do not exclude deepchecks.com.")
     p.add_argument("--raw", action="store_true", help="Dump aggregated JSON only, skip Claude.")
     args = p.parse_args()
 
@@ -190,11 +223,12 @@ def main() -> int:
             print(f"Missing env var: {key}", file=sys.stderr)
             return 1
 
+    excluded = [] if args.no_default_exclude else list(dict.fromkeys(args.exclude_domain))
     site = os.getenv("DD_SITE", "datadoghq.com")
-    print(f"Fetching frustration events from last {args.hours}h...", file=sys.stderr)
-    events = fetch_frustration_events(args.hours, args.app_id, args.limit)
-    rows = extract_signals(events, site)
-    print(f"Got {len(events)} events, {len(rows)} with frustration signals.", file=sys.stderr)
+    print(f"Fetching frustration events from last {args.hours}h (env={args.env or 'any'}, exclude={excluded})...", file=sys.stderr)
+    events = fetch_frustration_events(args.hours, args.app_id, args.limit, env=args.env)
+    rows, excluded_n = extract_signals(events, site, excluded)
+    print(f"Got {len(events)} events; kept {len(rows)} after excluding {excluded_n} internal.", file=sys.stderr)
 
     if not rows:
         print("No frustration signals found. Sababa — users happy.", file=sys.stderr)
