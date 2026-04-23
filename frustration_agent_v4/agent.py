@@ -89,13 +89,13 @@ One short paragraph with totals from `by_type` and `total_frustrations`
 for the scope.
 
 ### Top URLs
-Up to 5 rows per type present in `top_urls_by_type`. Each row:
-"{count} — {url}" with URL copied verbatim.
+Up to 5 rows per type present in `top_urls_by_type`. Each row formatted
+as: the count, an em dash, then the URL — with the URL copied verbatim.
 
 ### Top UI Targets
-Up to 5 rows per type present in `top_targets_by_type`. Each row:
-'{count} — "{label}"' with LABEL copied verbatim (preserve zero-width
-spaces and every character).
+Up to 5 rows per type present in `top_targets_by_type`. Each row: the
+count, an em dash, then the label in double quotes — with the LABEL
+copied verbatim (preserve zero-width spaces and every character).
 
 ### Most Affected Customers
 Follow `render_hints.most_affected_section` LITERALLY:
