@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
-"""Fire N randomized agent queries, each as its own Deepchecks session.
+"""Fire N randomized agent queries against frustration_agent v2.
 
-Used to populate Deepchecks with trace data for demos / review.
+Same seeded input generator as run_batch.py, so with the default
+seed=42 both runs receive the identical 30 prompts — that's what
+makes the v1↔v2 comparison in Deepchecks meaningful.
+
+This script sets DEEPCHECKS_VERSION=v2 BEFORE importing the
+deepchecks setup module, so traces land under the v2 version in
+Deepchecks even if .env still declares v1.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import random
 import sys
 import time
 import uuid
 
+# Must set version BEFORE load_dotenv and before deepchecks_setup imports it.
+os.environ.setdefault("DEEPCHECKS_VERSION", "v2")
+# Prevent .env from overriding our version pin.
+_pinned = os.environ["DEEPCHECKS_VERSION"]
+
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=False)
+os.environ["DEEPCHECKS_VERSION"] = _pinned  # enforce after dotenv
 
 from frustration_agent.deepchecks_setup import configure as configure_deepchecks
 
@@ -25,13 +38,13 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai.types import Content, Part
 
-from frustration_agent.agent import root_agent
+from frustration_agent_v2.agent import root_agent
 
-APP_NAME = "frustration_agent"
+APP_NAME = "frustration_agent_v2"
 
 
 async def _run_one(runner: Runner, session_service: InMemorySessionService, prompt: str) -> int:
-    user_id = f"batch-{uuid.uuid4().hex[:8]}"
+    user_id = f"batch-v2-{uuid.uuid4().hex[:8]}"
     session_id = str(uuid.uuid4())
     await session_service.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id)
     msg = Content(role="user", parts=[Part(text=prompt)])
@@ -72,7 +85,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("-n", "--count", type=int, default=30)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--delay", type=float, default=1.0, help="Seconds between queries.")
+    p.add_argument("--delay", type=float, default=1.0)
     args = p.parse_args()
     return asyncio.run(main_async(args.count, args.seed, args.delay))
 
